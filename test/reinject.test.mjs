@@ -144,6 +144,12 @@ test('injectRefreshCard: running agent → next-step; idle agent → next-turn',
       assert.match(text, /沈青梧/)
       assert.match(text, /剑客/)
       assert.match(text, /不需要向用户复述/, 'the card must forbid meta narration')
+      // v4 准入校验：kind 不能是字面值 "plugin"（SessionFormatError）。
+      const kind = agent.calls[0].message.source?.kind
+      assert.equal(typeof kind, 'string', 'source.kind must be a string')
+      assert.notEqual(kind, '', 'source.kind must be non-empty')
+      assert.notEqual(kind, 'plugin', 'source.kind must not be the rejected literal "plugin"')
+      assert.equal(kind, 'plugin:dsh-roleplay')
     }
   })
 })

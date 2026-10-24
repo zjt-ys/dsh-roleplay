@@ -439,7 +439,10 @@ export function apply(ctx, config = {}) {
     const message = {
       role: 'user',
       content: [{ type: 'text', text: lines.join('\n') }],
-      source: { kind: 'plugin', plugin: 'dsh-roleplay', reason },
+      // v4 消息来源规范：kind 直接标识生产者，字面值 "plugin" 会被
+      // dsh-session-format-v3-to-v4 的准入校验拒绝（SessionFormatError）。
+      // 未注册的插件名按官方迁移规则加 `plugin:` 前缀。
+      source: { kind: 'plugin:dsh-roleplay', reason },
     }
     try {
       if (agent.status === 'running') {
