@@ -317,9 +317,11 @@ export function apply(ctx, config = {}) {
                 },
               ])
               const written = store.write(sessionId, { ...record, memories }, sessionTitleOf(ctx, sessionId))
-              return written.ok
-                ? { ok: true, message: `已记住（${kind}）：${body}。当前共 ${memories.length} 条记忆。` }
-                : { ok: false, message: `记忆写入失败：${written.error}` }
+              if (!written.ok) return { ok: false, message: `记忆写入失败：${written.error}` }
+              // 模型自己记了新东西：立即推一张刷新卡，让本回合之后的工作上下文
+              // 也带上新记忆（记忆 context 每步重算，但卡片能显式确认这次写入）。
+              autoInjectAfterSave(sessionId, written.value.record, 'memory-tool')
+              return { ok: true, message: `已记住（${kind}）：${body}。当前共 ${memories.length} 条记忆。` }
             },
           }),
         )
@@ -402,6 +404,68 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  /**
+   * 把一份「重新注入」卡片塞进会话的下一步。
+   *
+   * 时机语义：
+   *   - agent 正在跑 → `inject()`（next-step）：卡片贴在当前步之后立即被消费；
+   *   - agent 空闲   → `followup()`（next-turn）：卡片在下一条用户消息前被消费，
+   *     不会平白唤醒一次模型请求。
+   *
+   * 卡片是 user 角色、`[system note]` 前缀：它是**给模型的指令**，不是用户的
+   * 话。改动人设/记忆后注入这一段，模型下一轮就按新人设说话——即使人设已经
+   * 在 system prompt 里，这一条也保证「中途换角色」立刻可感，而不是等 compaction
+   * 或会话重启。
+   *
+   * @param {object} agent - the live roleplay agent.
+   * @param {object} record - the freshly saved record.
+   * @param {string} reason - why this injection happened (sidebar-save | manual | memory-tool).
+   * @returns {{ok: boolean, mode?: string, error?: string}}
+   */
+  const injectRefreshCard = (agent, record, reason) => {
+    if (agent === undefined || agent === null) return { ok: false, error: 'agent-not-live' }
+    const send = typeof agent.followup === 'function' && typeof agent.inject === 'function' ? undefined : 'unsupported'
+    if (send !== undefined) return { ok: false, error: send }
+    const profile = record?.profile ?? {}
+    const name = String(profile.name ?? '').trim()
+    const lines = [
+      '[system note] 角色扮演设定已更新，立即生效：',
+      `- 本次更新来源：${reason === 'manual' ? '用户手动重新注入' : reason === 'memory-tool' ? '对话中更新了长期记忆' : '侧边栏保存'}`,
+      name !== '' ? `- 角色名：${name}` : '- 角色名：（未设定）',
+      String(profile.role ?? '').trim() !== '' ? `- 身份定位：${profile.role}` : '- 身份定位：（未设定）',
+      '- 请从下一句回复开始完全按更新后的角色设定、语气与记忆说话；与之前不一致的旧设定一律作废。',
+      '- 不需要向用户复述这份设定，也不要解释"设定已更新"；直接以角色身份继续。',
+    ]
+    const message = {
+      role: 'user',
+      content: [{ type: 'text', text: lines.join('\n') }],
+      source: { kind: 'plugin', plugin: 'dsh-roleplay', reason },
+    }
+    try {
+      if (agent.status === 'running') {
+        agent.inject(message)
+        return { ok: true, mode: 'next-step' }
+      }
+      agent.followup(message)
+      return { ok: true, mode: 'next-turn' }
+    } catch (error) {
+      return { ok: false, error: `inject-failed: ${error instanceof Error ? error.message : String(error)}` }
+    }
+  }
+
+  /** 保存后对 live 的角色扮演 agent 自动补一张刷新卡（吞错，绝不影响保存本身）。 */
+  const autoInjectAfterSave = (sessionId, record, reason) => {
+    try {
+      if (!isRoleplaySession(ctx, sessionId)) return
+      const agent = ctx.get('agents')?.get?.(sessionId)
+      if (agent === undefined) return
+      const outcome = injectRefreshCard(agent, record, reason)
+      if (!outcome.ok) logger.info?.(`dsh-roleplay: refresh card skipped for ${sessionId}: ${outcome.error}`)
+    } catch (error) {
+      logger.warn?.(`dsh-roleplay: auto inject failed for ${sessionId}: ${String(error)}`)
+    }
+  }
+
   /** Whether an existing session runs in character-play mode. */
   function isRoleplaySession(ctxRef, sessionId) {
     try {
@@ -469,8 +533,28 @@ export function apply(ctx, config = {}) {
                 if (sessionId === '') return sendJson(res, 200, { ok: false, error: 'missing-session' })
                 const written = store.write(sessionId, body?.record ?? body, sessionTitleOf(ctx, sessionId))
                 if (!written.ok) return sendJson(res, 200, { ok: false, error: written.error })
+                // 改动人设/记忆/提示词后自动重新注入：模型下一轮就按新设定说话。
+                autoInjectAfterSave(sessionId, written.value.record, 'sidebar-save')
                 const payload = statePayload(sessionId)
                 return sendJson(res, 200, { ok: true, ...payload })
+              }
+              if (method === 'POST' && route === '/reinject') {
+                // 手动重新注入：不落盘，只把当前档案作为刷新卡塞给模型。
+                const body = await readJsonBody(req)
+                const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : ''
+                if (sessionId === '') return sendJson(res, 200, { ok: false, error: 'missing-session' })
+                try {
+                  const agent = ctx.get('agents')?.get?.(sessionId)
+                  if (agent === undefined) return sendJson(res, 200, { ok: false, error: 'agent-not-live', message: '该会话当前没有活跃的对话进程，发一条消息后再试。' })
+                  if (isRoleplaySession(ctx, sessionId) !== true) {
+                    return sendJson(res, 200, { ok: false, error: 'not-roleplay', message: '只有角色扮演会话支持重新注入。' })
+                  }
+                  const loaded = store.read(sessionId, sessionTitleOf(ctx, sessionId))
+                  const outcome = injectRefreshCard(agent, loaded.record, 'manual')
+                  return sendJson(res, 200, { ok: outcome.ok, ...outcome, message: outcome.ok ? `已重新注入（${outcome.mode === 'next-step' ? '当前回合下一步生效' : '下一次回复生效'}）` : outcome.error })
+                } catch (error) {
+                  return sendJson(res, 200, { ok: false, error: 'reinject-failed', message: String(error instanceof Error ? error.message : error) })
+                }
               }
               if (method === 'POST' && route === '/delete') {
                 const body = await readJsonBody(req)

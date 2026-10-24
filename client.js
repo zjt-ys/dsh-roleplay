@@ -94,6 +94,9 @@ window.__ModuleLoader__.load({
       previewEmpty: '（当前没有可注入的内容）',
       unsaved: '未保存',
       error: '操作失败',
+      reinject: '重新注入',
+      reinjectHint: '把当前人设/记忆作为系统便签推给模型，立即按新设定说话（保存后会自动注入一次，通常无需手动点）。',
+      reinjectDone: '已重新注入，下一句回复即按当前设定生效。',
       kindFact: '事实',
       kindEvent: '事件',
       kindRelation: '关系',
@@ -159,6 +162,9 @@ window.__ModuleLoader__.load({
       previewEmpty: '(nothing to inject yet)',
       unsaved: 'unsaved',
       error: 'Failed',
+      reinject: 'Re-inject',
+      reinjectHint: 'Push the current persona/memory to the model as a system note so the very next reply follows it (saving already re-injects automatically; this button is for the rare manual case).',
+      reinjectDone: 'Re-injected — the next reply follows the current profile.',
       kindFact: 'Fact',
       kindEvent: 'Event',
       kindRelation: 'Relation',
@@ -385,6 +391,7 @@ window.__ModuleLoader__.load({
     const getPreview = (sessionId) => call(`/preview?session=${encodeURIComponent(sessionId)}`)
     const saveState = (sessionId, record) =>
       call('/save', { method: 'POST', body: JSON.stringify({ sessionId, record }) })
+    const reinject = (sessionId) => call('/reinject', { method: 'POST', body: JSON.stringify({ sessionId }) })
 
     /** Read the remembered target session. */
     function readRemembered() {
@@ -883,6 +890,21 @@ window.__ModuleLoader__.load({
         setMessage(t('newSessionHint'))
       }, [kit, t])
 
+      /** Manual re-injection: push the current profile to the live agent as a refresh card. */
+      const reinjectNow = useCallback(async () => {
+        if (sessionId === null) return
+        setPreviewLoading(true)
+        setError(null)
+        setMessage(null)
+        const body = await reinject(sessionId)
+        setPreviewLoading(false)
+        if (body === null || body.ok !== true) {
+          setError(String(body && (body.message || body.error) ? body.message || body.error : 'reinject-failed'))
+          return
+        }
+        setMessage(body.message || t('reinjectDone'))
+      }, [sessionId, t])
+
       const badge =
         roleplay === true
           ? el('span', { style: { ...S.badge, ...S.badgeOn } }, t('roleplayBadge'))
@@ -935,6 +957,17 @@ window.__ModuleLoader__.load({
           'button',
           { type: 'button', style: S.primary, onClick: startSession, title: t('newSessionHint') },
           t('newSession'),
+        ),
+        el(
+          'button',
+          {
+            type: 'button',
+            style: S.button,
+            disabled: saving || dirty,
+            title: t('reinjectHint'),
+            onClick: () => void reinjectNow(),
+          },
+          t('reinject'),
         ),
         el('button', { type: 'button', style: S.button, onClick: () => void load(sessionId) }, t('reload')),
         el(
