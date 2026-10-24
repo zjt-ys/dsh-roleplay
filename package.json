@@ -1,8 +1,20 @@
 {
   "name": "dsh-roleplay",
   "version": "1.0.0",
-  "private": true,
-  "description": "角色扮演模式：按会话独立管理人设 / 记忆 / 提示词，自动注入系统提示词，并在侧边栏提供三页签面板。",
+  "private": false,
+  "description": "角色扮演模式：按会话独立管理人设 / 长期记忆 / 提示词，自动注入该会话的系统提示词；侧边栏提供人设、记忆、提示词三个页签。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "roleplay",
+    "persona",
+    "memory"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zjt-ys/dsh-roleplay.git"
+  },
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -21,9 +33,16 @@
     "store.js",
     "cordis.patch.yml",
     "locale/*.json",
-    "icon.svg"
+    "icon.svg",
+    "README.md",
+    "LICENSE"
   ],
   "dsh": {
+    "id": "dsh-roleplay",
+    "name": "角色扮演",
+    "version": "1.0.0",
+    "repo": "zjt-ys/dsh-roleplay",
+    "permissions": "按会话读写角色档案、HTTP 路由、系统提示词 section/context、会话作用域工具",
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
