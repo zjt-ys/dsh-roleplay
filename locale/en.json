@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Roleplay Mode",
+    "description": "Per-session persona, long-term memory and prompt, injected into that session's system prompt, with a Persona / Memory / Prompt panel in the sidebar."
+  }
+}
